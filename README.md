@@ -1,6 +1,7 @@
 # Smart Rename
 
 Automatically renames image files with descriptive names using local AI — fully private, no internet required, runs in your system tray.
+What makes this unique compared to other similar projects is the ability to rename images downloaded in realtime.
 
 **Before → After**
 ```
