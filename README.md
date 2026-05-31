@@ -13,69 +13,71 @@ download (1).webp     →  golden_retriever_in_grass.webp
 
 ## Requirements
 
-- Python 3.10+
-- [Ollama](https://ollama.com) installed
-- The `llava` vision model
+You need to install these two things manually — everything else is handled by the setup script.
 
----
+### 1. Python 3.10+
 
-## Setup
+**Linux:** use your package manager
+```bash
+sudo pacman -S python    # Arch
+sudo apt install python3 # Ubuntu/Debian
+```
 
-### 1. Install Ollama
+**Windows:** download from [python.org](https://python.org)
+> ⚠️ Check **"Add Python to PATH"** during installation.
+
+### 2. Ollama
 
 **Linux:**
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ```
-**Windows:** Download the installer at [ollama.com](https://ollama.com)
 
-### 2. Pull the llava model
-```bash
-ollama pull llava
-```
+**Windows:** download the installer from [ollama.com](https://ollama.com)
 
-### 3. Clone this repo
+---
+
+## Installation
+
 ```bash
-git clone https://github.com/YOUR_USERNAME/smart-rename.git
+git clone https://github.com/chudweiser/smart-rename.git
 cd smart-rename
 ```
 
-### 4. Install Python dependencies
+**Linux:**
 ```bash
-pip install -r requirements.txt
+bash setup.sh
 ```
+
+**Windows:** double-click `setup.bat`
+
+The setup script will:
+- Check Python and Ollama are installed
+- Download the llava AI model (~4GB, one time only)
+- Create a virtual environment
+- Install all Python dependencies
+- Create a `run.sh` / `run.bat` shortcut to launch the app
 
 ---
 
 ## Usage
 
-### Step 1 — Start Ollama
-
 **Linux:**
 ```bash
-ollama serve &
-```
-**Windows:** Ollama starts automatically in the system tray after installation.
-
-### Step 2 — Run Smart Rename
-```bash
-python watcher.py
+bash run.sh
 ```
 
-A green dot appears in your system tray. Drop any image into a watched folder and it gets renamed within a couple of seconds.
+**Windows:** double-click `run.bat`
 
-**Right-click the tray icon** to:
-- Pause / Resume
-- Open Settings & Log
-- Quit
+A green dot appears in your system tray. Right-click it to open Settings, pause, or quit.
 
-**Settings window** lets you add or remove watched folders. Your choices are saved automatically.
+Drop any image into a watched folder and it gets renamed within a couple of seconds.
 
 ---
 
 ## Default watched folders
 
-On first run, Smart Rename watches whichever of these exist on your system:
+On first run, Smart Rename watches whichever of these exist:
 
 | Linux | Windows |
 |---|---|
@@ -83,25 +85,24 @@ On first run, Smart Rename watches whichever of these exist on your system:
 | `~/Pictures/Screenshots` | `C:\Users\YOU\Pictures\Screenshots` |
 | `~/Pictures` | `C:\Users\YOU\Pictures` |
 
-You can add or remove any folder from the Settings window.
+Add or remove folders anytime from the Settings window.
 
 ---
 
-## Notes
+## Supported formats
 
-- Works on **Linux** and **Windows**
-- Supports `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.webp`, `.tiff`
-- `.webp` files are automatically converted before sending to the AI
-- Waits for downloads to fully finish before processing
-- Will never overwrite an existing file
-- Settings saved to `~/.smart-rename-config.json`
+`.jpg` `.jpeg` `.png` `.gif` `.bmp` `.webp` `.tiff`
 
 ---
 
 ## Troubleshooting
 
-**Nothing is renaming** — make sure Ollama is running (`ollama serve`) and the llava model is pulled (`ollama pull llava`).
+**Nothing is renaming** — make sure Ollama is running. The setup script starts it automatically via `run.sh`/`run.bat`, but if you launched `watcher.py` directly, start Ollama first with `ollama serve`.
 
-**Tray icon doesn't appear on Linux** — install `libappindicator`: `sudo pacman -S libappindicator-gtk3` (Arch) or `sudo apt install libappindicator3-1` (Ubuntu).
+**Slow on first image** — llava loads into GPU memory on first use (~1–2s extra). Every image after that is fast.
 
-**Slow on first image after startup** — llava loads into VRAM on first use. Every image after that is fast (~1–2s).
+**Tray icon missing on Linux** — install the appindicator library:
+```bash
+sudo pacman -S libappindicator-gtk3   # Arch
+sudo apt install libappindicator3-1   # Ubuntu
+```
