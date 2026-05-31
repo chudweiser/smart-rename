@@ -50,7 +50,7 @@ cd smart-rename
 bash setup.sh
 ```
 
-**Windows:** double-click `setup.bat`
+**Windows:** double-click `setup.sh`
 
 The setup script will:
 - Check Python and Ollama are installed
