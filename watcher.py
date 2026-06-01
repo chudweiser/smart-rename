@@ -10,6 +10,7 @@ import base64
 import re
 import json
 import threading
+import queue
 import requests
 import io
 from pathlib import Path
@@ -48,6 +49,7 @@ for candidate in [
         DEFAULT_FOLDERS.append(str(candidate))
 
 MAX_LOG = 200  # max lines kept in the log
+_ui_queue: queue.Queue = queue.Queue()  # cross-thread UI requests
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -73,27 +75,22 @@ def wait_for_file_ready(path: Path, timeout: int = 30) -> bool:
         try:
             curr_size = path.stat().st_size
         except FileNotFoundError:
-            # File vanished (was a temp file) - give up
             return False
         except OSError:
             time.sleep(0.5)
             continue
-
         if curr_size > 0 and curr_size == prev_size:
             stable_count += 1
         else:
             stable_count = 0
             prev_size = curr_size
-
         if stable_count >= 2:
-            # Confirm not locked
             try:
                 with open(path, 'rb'):
                     pass
                 return True
             except OSError:
                 stable_count = 0
-
         time.sleep(0.5)
     return False
 
@@ -137,63 +134,94 @@ def make_filename(description: str, original: Path) -> Path:
 class ImageHandler(FileSystemEventHandler):
     def __init__(self, app):
         self.app = app
-        self._seen = set()  # paths already claimed by on_moved
+        self._processing = set()   # paths currently being processed
+        self._done = set()         # paths already renamed (by original path)
+        self._lock = threading.Lock()
+
+    def _claim(self, path: Path) -> bool:
+        """Return True if we should process this path, False if already handled."""
+        key = str(path)
+        with self._lock:
+            if key in self._processing or key in self._done:
+                return False
+            self._processing.add(key)
+            return True
+
+    def _release(self, path: Path, renamed_to: Path | None = None):
+        key = str(path)
+        with self._lock:
+            self._processing.discard(key)
+            self._done.add(key)
+            if renamed_to:
+                # Also mark the new name so on_modified events don't reprocess it
+                self._done.add(str(renamed_to))
 
     def on_created(self, event):
-        # Ignore on_created — Chrome/Edge create temp files that vanish immediately.
-        # Real files arrive via on_moved. We only handle on_created for apps that
-        # write directly (e.g. screenshots), but give them a short delay first.
         if event.is_directory:
             return
         path = Path(event.src_path)
         if path.suffix.lower() not in IMAGE_EXTS:
             return
-        # Delay slightly — if a move event is coming, it will cancel this
+        # Delay — browser temp files vanish immediately; real files persist
         threading.Thread(target=self._process_with_delay, args=(path,), daemon=True).start()
 
     def on_moved(self, event):
+        # Browsers write .tmp -> .crdownload -> final image name
         if event.is_directory:
             return
-        src  = Path(event.src_path)
         dest = Path(event.dest_path)
         if dest.suffix.lower() not in IMAGE_EXTS:
             return
-        # Cancel any pending on_created processing for this destination
-        self._seen.add(str(dest))
+        # Mark the source as done so on_created delay thread ignores it
+        with self._lock:
+            self._done.add(str(Path(event.src_path)))
         threading.Thread(target=self._process, args=(dest,), daemon=True).start()
 
     def _process_with_delay(self, path: Path):
-        # Wait briefly — if the file disappears it was a temp file
         time.sleep(2)
         if not path.exists():
-            return
-        # Skip if already being handled by on_moved
-        if str(path) in self._seen:
             return
         self._process(path)
 
     def _process(self, path: Path):
         if not self.app.enabled:
             return
+        if not self._claim(path):
+            return
         self.app.log(f"Detected: {path.name}")
         if not wait_for_file_ready(path):
             self.app.log(f"  ✗ Timed out waiting for file to finish: {path.name}")
+            self._release(path)
             return
         if not path.exists():
+            self._release(path)
             return
         description = describe_image(path)
         if not description:
             self.app.log(f"  ✗ No description returned for {path.name}")
+            self._release(path)
             return
         new_path = make_filename(description, path)
         if new_path == path:
             self.app.log(f"  – Name unchanged: {path.name}")
+            self._release(path, path)
             return
-        try:
-            path.rename(new_path)
-            self.app.log(f"  ✓ {path.name}  →  {new_path.name}")
-        except Exception as e:
-            self.app.log(f"  ✗ Rename failed: {e}")
+        for attempt in range(6):
+            try:
+                path.rename(new_path)
+                self.app.log(f"  ✓ {path.name}  →  {new_path.name}")
+                self._release(path, new_path)
+                return
+            except PermissionError:
+                if attempt < 5:
+                    time.sleep(0.5)
+                else:
+                    self.app.log(f"  ✗ Rename failed (file locked): {path.name}")
+                    self._release(path)
+            except Exception as e:
+                self.app.log(f"  ✗ Rename failed: {e}")
+                self._release(path)
+                return
 
 # ── Tray icon (simple colored square) ────────────────────────────────────────
 
@@ -305,12 +333,8 @@ class SmartRenameApp:
     # ── Settings window ───────────────────────────────────────────────────────
 
     def _open_window(self):
-        if self.window and self.window.winfo_exists():
-            self.window.lift()
-            return
-        self.window = SettingsWindow(self)
-        self.window.mainloop()
-        self.window = None
+        # Must open tkinter windows on the main thread (required on Windows)
+        _ui_queue.put("open_settings")
 
 
 # ── Settings / Log window ─────────────────────────────────────────────────────
@@ -447,10 +471,22 @@ if __name__ == "__main__":
 
     app = SmartRenameApp()
 
-    # Keep main thread alive
+    # Main thread drives all tkinter windows (required on Windows).
+    _settings_window = None
     try:
         while True:
-            time.sleep(1)
+            try:
+                msg = _ui_queue.get_nowait()
+            except queue.Empty:
+                msg = None
+            if msg == "open_settings":
+                if _settings_window is None or not _settings_window.winfo_exists():
+                    _settings_window = SettingsWindow(app)
+                    _settings_window.mainloop()
+                    _settings_window = None
+                else:
+                    _settings_window.lift()
+            time.sleep(0.05)
     except KeyboardInterrupt:
         if app.observer:
             app.observer.stop()
