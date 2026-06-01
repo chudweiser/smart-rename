@@ -64,18 +64,36 @@ def save_config(cfg: dict):
 
 # ── Image helpers ─────────────────────────────────────────────────────────────
 
-def wait_for_file_ready(path: Path, timeout: int = 15) -> bool:
-    """Wait until file size stops changing (download finished)."""
+def wait_for_file_ready(path: Path, timeout: int = 30) -> bool:
+    """Wait until file exists, has stable size, and is not locked."""
     prev_size = -1
+    stable_count = 0
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             curr_size = path.stat().st_size
         except FileNotFoundError:
+            # File vanished (was a temp file) - give up
             return False
+        except OSError:
+            time.sleep(0.5)
+            continue
+
         if curr_size > 0 and curr_size == prev_size:
-            return True
-        prev_size = curr_size
+            stable_count += 1
+        else:
+            stable_count = 0
+            prev_size = curr_size
+
+        if stable_count >= 2:
+            # Confirm not locked
+            try:
+                with open(path, 'rb'):
+                    pass
+                return True
+            except OSError:
+                stable_count = 0
+
         time.sleep(0.5)
     return False
 
@@ -119,17 +137,40 @@ def make_filename(description: str, original: Path) -> Path:
 class ImageHandler(FileSystemEventHandler):
     def __init__(self, app):
         self.app = app
+        self._seen = set()  # paths already claimed by on_moved
 
     def on_created(self, event):
+        # Ignore on_created — Chrome/Edge create temp files that vanish immediately.
+        # Real files arrive via on_moved. We only handle on_created for apps that
+        # write directly (e.g. screenshots), but give them a short delay first.
         if event.is_directory:
             return
         path = Path(event.src_path)
         if path.suffix.lower() not in IMAGE_EXTS:
             return
-        # Skip browser temp files
-        if path.suffix.lower() in {".part", ".crdownload", ".tmp"}:
+        # Delay slightly — if a move event is coming, it will cancel this
+        threading.Thread(target=self._process_with_delay, args=(path,), daemon=True).start()
+
+    def on_moved(self, event):
+        if event.is_directory:
             return
-        threading.Thread(target=self._process, args=(path,), daemon=True).start()
+        src  = Path(event.src_path)
+        dest = Path(event.dest_path)
+        if dest.suffix.lower() not in IMAGE_EXTS:
+            return
+        # Cancel any pending on_created processing for this destination
+        self._seen.add(str(dest))
+        threading.Thread(target=self._process, args=(dest,), daemon=True).start()
+
+    def _process_with_delay(self, path: Path):
+        # Wait briefly — if the file disappears it was a temp file
+        time.sleep(2)
+        if not path.exists():
+            return
+        # Skip if already being handled by on_moved
+        if str(path) in self._seen:
+            return
+        self._process(path)
 
     def _process(self, path: Path):
         if not self.app.enabled:
