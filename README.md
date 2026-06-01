@@ -50,7 +50,9 @@ cd smart-rename
 bash setup.sh
 ```
 
-**Windows:** double-click `setup.bat`
+**Windows:** double-click `setup.bat` 
+(.exe available in releases for easy 1 click run, application is found as a green circle in your taskbar) 
+Avoid OneDrive folders
 
 The setup script will:
 - Check Python and Ollama are installed
